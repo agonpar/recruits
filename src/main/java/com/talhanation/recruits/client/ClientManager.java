@@ -37,6 +37,9 @@ public class ClientManager {
 
     public static Map<String, RecruitsRoute> routesMap = new HashMap<>();
 
+    // Map to store group positions for rendering on the world map (even when entities are not loaded)
+    public static Map<UUID, GroupPositionData> groupPositions = new HashMap<>();
+
     @OnlyIn(Dist.CLIENT)
     public static RecruitsDiplomacyManager.DiplomacyStatus getRelation(String team, String otherTeam) {
         return diplomacyMap.getOrDefault(team, new HashMap<>()).getOrDefault(otherTeam, RecruitsDiplomacyManager.DiplomacyStatus.NEUTRAL);

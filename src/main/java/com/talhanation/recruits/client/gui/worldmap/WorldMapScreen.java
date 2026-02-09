@@ -64,6 +64,27 @@ public class WorldMapScreen extends Screen {
     public RecruitsRoute selectedRoute;
     private GroupIconButton groupsButton;
 
+    // Store group icon positions for hover tooltips
+    private static class GroupIconInfo {
+        int x, y, size;
+        String name;
+        int memberCount;
+
+        GroupIconInfo(int x, int y, int size, String name, int memberCount) {
+            this.x = x;
+            this.y = y;
+            this.size = size;
+            this.name = name;
+            this.memberCount = memberCount;
+        }
+
+        boolean contains(int mouseX, int mouseY) {
+            return mouseX >= x - size/2 && mouseX <= x + size/2 &&
+                   mouseY >= y - size/2 && mouseY <= y + size/2;
+        }
+    }
+    private List<GroupIconInfo> groupIcons = new ArrayList<>();
+
     public WorldMapScreen() {
         super(Component.literal(""));
         this.contextMenu = new WorldMapContextMenu(this);
@@ -190,6 +211,46 @@ public class WorldMapScreen extends Screen {
 
         // Render widgets (buttons) on top of everything
         super.render(guiGraphics, mouseX, mouseY, partialTicks);
+
+        // Render group icon tooltips when hovering (especially when zoom is low and text is hidden)
+        if (scale <= 1.5) {
+            for (GroupIconInfo iconInfo : groupIcons) {
+                if (iconInfo.contains(mouseX, mouseY)) {
+                    renderGroupTooltip(guiGraphics, iconInfo, mouseX, mouseY);
+                    break; // Only show one tooltip at a time
+                }
+            }
+        }
+    }
+
+    private void renderGroupTooltip(GuiGraphics guiGraphics, GroupIconInfo iconInfo, int mouseX, int mouseY) {
+        // Prepare tooltip text
+        String groupName = iconInfo.name;
+        String troopCount = "Troops: " + iconInfo.memberCount;
+
+        // Calculate tooltip dimensions
+        int nameWidth = font.width(groupName);
+        int countWidth = font.width(troopCount);
+        int tooltipWidth = Math.max(nameWidth, countWidth) + 8;
+        int tooltipHeight = font.lineHeight * 2 + 6;
+
+        // Position tooltip near mouse
+        int tooltipX = mouseX + 12;
+        int tooltipY = mouseY - 12;
+
+        // Keep tooltip on screen
+        if (tooltipX + tooltipWidth > width) tooltipX = mouseX - tooltipWidth - 12;
+        if (tooltipY + tooltipHeight > height) tooltipY = height - tooltipHeight;
+        if (tooltipY < 0) tooltipY = 0;
+
+        // Draw tooltip background
+        guiGraphics.fill(tooltipX - 3, tooltipY - 3, tooltipX + tooltipWidth, tooltipY + tooltipHeight, 0xF0100010);
+        guiGraphics.fill(tooltipX - 2, tooltipY - 2, tooltipX + tooltipWidth - 1, tooltipY + tooltipHeight - 1, 0x505000FF);
+        guiGraphics.fill(tooltipX - 1, tooltipY - 1, tooltipX + tooltipWidth - 2, tooltipY + tooltipHeight - 2, 0x5028007F);
+
+        // Draw tooltip text
+        guiGraphics.drawString(font, groupName, tooltipX + 2, tooltipY + 2, 0xFFFFAA, false);
+        guiGraphics.drawString(font, troopCount, tooltipX + 2, tooltipY + 2 + font.lineHeight + 2, 0xFFFFFF, false);
     }
 
     @Override
@@ -325,17 +386,23 @@ public class WorldMapScreen extends Screen {
         List<RecruitsGroup> playerGroups = ClientManager.groups;
         if (playerGroups == null || playerGroups.isEmpty()) return;
 
-        // Get all recruits in the area
+        // Clear group icons list for this frame
+        groupIcons.clear();
+
+        // Get recruits in a very large area (all loaded chunks)
+        int searchRadius = 100000;
+        net.minecraft.world.phys.AABB searchBox = player.getBoundingBox().inflate(searchRadius);
+
         List<com.talhanation.recruits.entities.AbstractRecruitEntity> recruits =
             minecraft.level.getEntitiesOfClass(
                 com.talhanation.recruits.entities.AbstractRecruitEntity.class,
-                player.getBoundingBox().inflate(1000)
+                searchBox
             );
 
         // Filter recruits to only show those belonging to the player's faction
         recruits.removeIf(recruit -> !isRecruitVisibleToPlayer(recruit));
 
-        // Group recruits by their group UUID first
+        // Group recruits by their group UUID
         Map<UUID, List<com.talhanation.recruits.entities.AbstractRecruitEntity>> recruitsByGroup = new HashMap<>();
 
         for (com.talhanation.recruits.entities.AbstractRecruitEntity recruit : recruits) {
@@ -345,24 +412,40 @@ public class WorldMapScreen extends Screen {
             }
         }
 
-        // For each group, cluster recruits by proximity
+        // Track which groups we've rendered from loaded entities
+        Set<UUID> renderedGroups = new HashSet<>();
+
+        // Render groups that have recruits in loaded chunks
         for (RecruitsGroup group : playerGroups) {
             List<com.talhanation.recruits.entities.AbstractRecruitEntity> groupRecruits =
                 recruitsByGroup.get(group.getUUID());
 
-            if (groupRecruits == null || groupRecruits.isEmpty()) continue;
+            if (groupRecruits != null && !groupRecruits.isEmpty()) {
+                // Cluster recruits by proximity
+                List<RecruitCluster> clusters = clusterRecruits(groupRecruits, 24.0);
 
-            // Cluster recruits by proximity (e.g., within 50 blocks)
-            List<RecruitCluster> clusters = clusterRecruits(groupRecruits, 24.0);
+                // Render an icon for each cluster
+                for (RecruitCluster cluster : clusters) {
+                    int pixelX = (int)(offsetX + cluster.centerX * scale);
+                    int pixelZ = (int)(offsetZ + cluster.centerZ * scale);
+                    renderGroupIcon(guiGraphics, pixelX, pixelZ, group, cluster.recruits.size());
+                }
 
-            // Render an icon for each cluster
-            for (RecruitCluster cluster : clusters) {
-                // Convert world coordinates to screen coordinates
-                int pixelX = (int)(offsetX + cluster.centerX * scale);
-                int pixelZ = (int)(offsetZ + cluster.centerZ * scale);
+                renderedGroups.add(group.getUUID());
+            }
+        }
 
-                // Render group icon with the number of recruits in this cluster
-                renderGroupIcon(guiGraphics, pixelX, pixelZ, group, cluster.recruits.size());
+        // Render groups from stored position data (for groups in unloaded chunks)
+        for (RecruitsGroup group : playerGroups) {
+            if (renderedGroups.contains(group.getUUID())) continue;
+
+            com.talhanation.recruits.world.GroupPositionData posData =
+                ClientManager.groupPositions.get(group.getUUID());
+
+            if (posData != null && posData.getMemberCount() > 0) {
+                int pixelX = (int)(offsetX + posData.getX() * scale);
+                int pixelZ = (int)(offsetZ + posData.getZ() * scale);
+                renderGroupIcon(guiGraphics, pixelX, pixelZ, group, posData.getMemberCount());
             }
         }
     }
@@ -501,6 +584,10 @@ public class WorldMapScreen extends Screen {
         }
 
         pose.popPose();
+
+        // Store icon info for hover detection
+        int iconSize = (int)(16 * iconScale);
+        groupIcons.add(new GroupIconInfo(pixelX, pixelZ, iconSize, group.getName(), memberCount));
 
         // Render member count and group name if zoom is high enough
         if (scale > 1.5) {
