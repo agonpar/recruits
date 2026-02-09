@@ -62,6 +62,7 @@ public class WorldMapScreen extends Screen {
     RecruitsClaim selectedClaim = null;
     private ClaimInfoMenu claimInfoMenu;
     public RecruitsRoute selectedRoute;
+    private GroupIconButton groupsButton;
 
     public WorldMapScreen() {
         super(Component.literal(""));
@@ -88,6 +89,29 @@ public class WorldMapScreen extends Screen {
         }
 
         claimInfoMenu.init();
+
+        // Add groups management icon button in top-right corner
+        int iconSize = 24;
+        int margin = 5;
+
+        groupsButton = new GroupIconButton(
+            width - iconSize - margin,
+            margin,
+            iconSize,
+            iconSize,
+            button -> openGroupsScreen()
+        );
+
+        groupsButton.setTooltip(net.minecraft.client.gui.components.Tooltip.create(
+            Component.literal("Manage Groups")
+        ));
+        addRenderableWidget(groupsButton);
+    }
+
+    private void openGroupsScreen() {
+        if (minecraft != null && player != null) {
+            minecraft.setScreen(new com.talhanation.recruits.client.gui.group.RecruitsGroupListScreen(player));
+        }
     }
 
     public void centerOnPlayer() {
@@ -163,6 +187,9 @@ public class WorldMapScreen extends Screen {
             claimInfoMenu.setPosition(p.x, p.y);
             claimInfoMenu.render(guiGraphics);
         }
+
+        // Render widgets (buttons) on top of everything
+        super.render(guiGraphics, mouseX, mouseY, partialTicks);
     }
 
     @Override
@@ -305,6 +332,9 @@ public class WorldMapScreen extends Screen {
                 player.getBoundingBox().inflate(1000)
             );
 
+        // Filter recruits to only show those belonging to the player's faction
+        recruits.removeIf(recruit -> !isRecruitVisibleToPlayer(recruit));
+
         // Group recruits by their group UUID first
         Map<UUID, List<com.talhanation.recruits.entities.AbstractRecruitEntity>> recruitsByGroup = new HashMap<>();
 
@@ -335,6 +365,30 @@ public class WorldMapScreen extends Screen {
                 renderGroupIcon(guiGraphics, pixelX, pixelZ, group, cluster.recruits.size());
             }
         }
+    }
+
+    private boolean isRecruitVisibleToPlayer(com.talhanation.recruits.entities.AbstractRecruitEntity recruit) {
+        if (recruit == null || player == null) return false;
+
+        // Check if the recruit belongs to the player or a faction member
+        UUID recruitOwner = recruit.getOwnerUUID();
+        if (recruitOwner == null) return false;
+
+        // If player owns this recruit directly, show it
+        if (recruitOwner.equals(player.getUUID())) return true;
+
+        // If no faction system, only show own recruits
+        if (ownFaction == null) return false;
+
+        // Check if the recruit's owner is in the same faction
+        // Get the recruit's team and compare with player's faction
+        net.minecraft.world.scores.Team recruitTeam = recruit.getTeam();
+        if (recruitTeam == null) return false;
+
+        String recruitTeamName = recruitTeam.getName();
+        String playerTeamName = ownFaction.getStringID();
+
+        return recruitTeamName.equals(playerTeamName);
     }
 
     private List<RecruitCluster> clusterRecruits(List<com.talhanation.recruits.entities.AbstractRecruitEntity> recruits, double maxDistance) {
@@ -1147,5 +1201,42 @@ public class WorldMapScreen extends Screen {
 
     }
 
+    // Custom button class for group icon
+    private static class GroupIconButton extends net.minecraft.client.gui.components.Button {
+        private static final ResourceLocation SWORD_ICON = RecruitsGroup.IMAGES.get(0);
+
+        public GroupIconButton(int x, int y, int width, int height, OnPress onPress) {
+            super(x, y, width, height, Component.empty(), onPress, DEFAULT_NARRATION);
+        }
+
+        @Override
+        public void renderWidget(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
+            // Draw button background
+            int backgroundColor = this.isHovered() ? 0xFF555555 : 0xFF333333;
+            int borderColor = this.isHovered() ? 0xFFFFFFFF : 0xFF999999;
+
+            // Background
+            guiGraphics.fill(getX(), getY(), getX() + width, getY() + height, backgroundColor);
+
+            // Border
+            guiGraphics.fill(getX(), getY(), getX() + width, getY() + 1, borderColor); // Top
+            guiGraphics.fill(getX(), getY() + height - 1, getX() + width, getY() + height, borderColor); // Bottom
+            guiGraphics.fill(getX(), getY(), getX() + 1, getY() + height, borderColor); // Left
+            guiGraphics.fill(getX() + width - 1, getY(), getX() + width, getY() + height, borderColor); // Right
+
+            // Draw sword icon centered
+            RenderSystem.enableBlend();
+            RenderSystem.defaultBlendFunc();
+            RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
+
+            int iconSize = 16;
+            int iconX = getX() + (width - iconSize) / 2;
+            int iconY = getY() + (height - iconSize) / 2;
+
+            guiGraphics.blit(SWORD_ICON, iconX, iconY, 0, 0, iconSize, iconSize, iconSize, iconSize);
+        }
+    }
+
 
 }
+
