@@ -12,6 +12,7 @@ import com.talhanation.recruits.network.MessageDoPayment;
 import com.talhanation.recruits.network.MessageUpdateClaim;
 import com.talhanation.recruits.world.RecruitsClaim;
 import com.talhanation.recruits.world.RecruitsFaction;
+import com.talhanation.recruits.world.RecruitsGroup;
 import com.talhanation.recruits.world.RecruitsPlayerInfo;
 import com.talhanation.recruits.world.RecruitsRoute;
 import net.minecraft.client.Minecraft;
@@ -133,6 +134,8 @@ public class WorldMapScreen extends Screen {
         if (player != null) {
             renderPlayerPosition(guiGraphics);
         }
+
+        renderRecruitGroups(guiGraphics);
 
         if (selectedChunk != null && (selectedClaim == null || contextMenu.isVisible())) {
             renderChunkOutline(guiGraphics, selectedChunk.x, selectedChunk.z, CHUNK_SELECTION_COLOR);
@@ -287,6 +290,196 @@ public class WorldMapScreen extends Screen {
 
     public void renderWaypoint(GuiGraphics guiGraphics){
 
+    }
+
+    private void renderRecruitGroups(GuiGraphics guiGraphics) {
+        if (player == null || minecraft.level == null) return;
+
+        List<RecruitsGroup> playerGroups = ClientManager.groups;
+        if (playerGroups == null || playerGroups.isEmpty()) return;
+
+        // Get all recruits in the area
+        List<com.talhanation.recruits.entities.AbstractRecruitEntity> recruits =
+            minecraft.level.getEntitiesOfClass(
+                com.talhanation.recruits.entities.AbstractRecruitEntity.class,
+                player.getBoundingBox().inflate(1000)
+            );
+
+        // Group recruits by their group UUID first
+        Map<UUID, List<com.talhanation.recruits.entities.AbstractRecruitEntity>> recruitsByGroup = new HashMap<>();
+
+        for (com.talhanation.recruits.entities.AbstractRecruitEntity recruit : recruits) {
+            UUID groupUUID = recruit.getGroup();
+            if (groupUUID != null) {
+                recruitsByGroup.computeIfAbsent(groupUUID, k -> new ArrayList<>()).add(recruit);
+            }
+        }
+
+        // For each group, cluster recruits by proximity
+        for (RecruitsGroup group : playerGroups) {
+            List<com.talhanation.recruits.entities.AbstractRecruitEntity> groupRecruits =
+                recruitsByGroup.get(group.getUUID());
+
+            if (groupRecruits == null || groupRecruits.isEmpty()) continue;
+
+            // Cluster recruits by proximity (e.g., within 50 blocks)
+            List<RecruitCluster> clusters = clusterRecruits(groupRecruits, 24.0);
+
+            // Render an icon for each cluster
+            for (RecruitCluster cluster : clusters) {
+                // Convert world coordinates to screen coordinates
+                int pixelX = (int)(offsetX + cluster.centerX * scale);
+                int pixelZ = (int)(offsetZ + cluster.centerZ * scale);
+
+                // Render group icon with the number of recruits in this cluster
+                renderGroupIcon(guiGraphics, pixelX, pixelZ, group, cluster.recruits.size());
+            }
+        }
+    }
+
+    private List<RecruitCluster> clusterRecruits(List<com.talhanation.recruits.entities.AbstractRecruitEntity> recruits, double maxDistance) {
+        List<RecruitCluster> clusters = new ArrayList<>();
+        if (recruits.isEmpty()) return clusters;
+
+        // Use squared distance to avoid expensive sqrt calculations
+        double maxDistanceSquared = maxDistance * maxDistance;
+
+        // Track which recruits have been assigned to a cluster
+        Set<com.talhanation.recruits.entities.AbstractRecruitEntity> assigned = new HashSet<>();
+
+        for (com.talhanation.recruits.entities.AbstractRecruitEntity seed : recruits) {
+            if (assigned.contains(seed)) continue;
+
+            // Start a new cluster
+            RecruitCluster cluster = new RecruitCluster();
+            cluster.recruits.add(seed);
+            assigned.add(seed);
+
+            // Use a queue to process cluster members iteratively
+            Queue<com.talhanation.recruits.entities.AbstractRecruitEntity> toProcess = new LinkedList<>();
+            toProcess.add(seed);
+
+            while (!toProcess.isEmpty()) {
+                com.talhanation.recruits.entities.AbstractRecruitEntity current = toProcess.poll();
+
+                for (com.talhanation.recruits.entities.AbstractRecruitEntity candidate : recruits) {
+                    if (assigned.contains(candidate)) continue;
+
+                    double dx = candidate.getX() - current.getX();
+                    double dz = candidate.getZ() - current.getZ();
+                    double distanceSquared = dx * dx + dz * dz;
+
+                    if (distanceSquared <= maxDistanceSquared) {
+                        cluster.recruits.add(candidate);
+                        assigned.add(candidate);
+                        toProcess.add(candidate);
+                    }
+                }
+            }
+
+            // Calculate cluster center
+            cluster.calculateCenter();
+            clusters.add(cluster);
+        }
+
+        return clusters;
+    }
+
+    private static class RecruitCluster {
+        List<com.talhanation.recruits.entities.AbstractRecruitEntity> recruits = new ArrayList<>();
+        double centerX;
+        double centerZ;
+
+        void calculateCenter() {
+            if (recruits.isEmpty()) return;
+
+            double sumX = 0;
+            double sumZ = 0;
+
+            for (com.talhanation.recruits.entities.AbstractRecruitEntity recruit : recruits) {
+                sumX += recruit.getX();
+                sumZ += recruit.getZ();
+            }
+
+            centerX = sumX / recruits.size();
+            centerZ = sumZ / recruits.size();
+        }
+    }
+
+    private void renderGroupIcon(GuiGraphics guiGraphics, int pixelX, int pixelZ, RecruitsGroup group, int memberCount) {
+        PoseStack pose = guiGraphics.pose();
+
+        // Get faction color
+        int factionColor = 0xFFFFFFFF; // Default white
+        if (ownFaction != null) {
+            net.minecraft.ChatFormatting chatColor = net.minecraft.ChatFormatting.getById(ownFaction.getTeamColor());
+            if (chatColor != null && chatColor.getColor() != null) {
+                factionColor = 0xFF000000 | chatColor.getColor();
+            }
+        }
+
+        pose.pushPose();
+        pose.translate(pixelX, pixelZ, 0);
+
+        // Scale based on zoom level - much smaller
+        float iconScale = (float)Math.max(0.8, Math.min(1.5, scale * 0.5));
+        pose.scale(iconScale, iconScale, iconScale);
+
+        // Get group image
+        int imageIndex = group.getImage();
+        if (imageIndex >= 0 && imageIndex < RecruitsGroup.IMAGES.size()) {
+            ResourceLocation groupTexture = RecruitsGroup.IMAGES.get(imageIndex);
+
+            RenderSystem.enableBlend();
+            RenderSystem.defaultBlendFunc();
+            RenderSystem.setShaderColor(
+                ((factionColor >> 16) & 0xFF) / 255.0f,
+                ((factionColor >> 8) & 0xFF) / 255.0f,
+                (factionColor & 0xFF) / 255.0f,
+                ((factionColor >> 24) & 0xFF) / 255.0f
+            );
+
+            // Draw the group icon (16x16 texture)
+            guiGraphics.blit(groupTexture, -8, -8, 0, 0, 16, 16, 16, 16);
+
+            // Reset shader color
+            RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
+        }
+
+        pose.popPose();
+
+        // Render member count and group name if zoom is high enough
+        if (scale > 1.5) {
+            float textScale = (float)Math.min(0.7, scale / 3.0);
+
+            // Render member count
+            String countText = String.valueOf(memberCount);
+            int countWidth = font.width(countText);
+
+            pose.pushPose();
+            pose.translate(pixelX - (countWidth * textScale) / 2.0, pixelZ + 8, 0);
+            pose.scale(textScale, textScale, 1.0f);
+
+            // Draw background for better visibility
+            guiGraphics.fill(-1, -1, countWidth + 1, font.lineHeight + 1, 0x80000000);
+            guiGraphics.drawString(font, countText, 0, 0, 0xFFFFFF, false);
+
+            pose.popPose();
+
+            // Render group name below count
+            String groupName = group.getName();
+            int nameWidth = font.width(groupName);
+
+            pose.pushPose();
+            pose.translate(pixelX - (nameWidth * textScale) / 2.0, pixelZ + 8 + (font.lineHeight + 2) * textScale, 0);
+            pose.scale(textScale, textScale, 1.0f);
+
+            // Draw background for better visibility
+            guiGraphics.fill(-1, -1, nameWidth + 1, font.lineHeight + 1, 0x80000000);
+            guiGraphics.drawString(font, groupName, 0, 0, 0xFFFFAA, false);
+
+            pose.popPose();
+        }
     }
 
     private static final ItemStack BOAT_STACK = new ItemStack(Items.OAK_BOAT);
