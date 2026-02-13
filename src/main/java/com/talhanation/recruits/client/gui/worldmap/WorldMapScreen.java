@@ -91,6 +91,11 @@ public class WorldMapScreen extends Screen {
     private boolean claimMode = false; // Claim mode disabled by default
     private ClaimModeButton claimModeButton;
 
+    // Right-click drag selection
+    private boolean isDraggingRightClick = false;
+    private double rightClickStartX, rightClickStartY;
+    private ClearSelectionButton clearSelectionButton;
+
     public WorldMapScreen() {
         super(Component.literal(""));
         this.contextMenu = new WorldMapContextMenu(this);
@@ -150,6 +155,23 @@ public class WorldMapScreen extends Screen {
             Component.literal("Toggle Claim Mode")
         ));
         addRenderableWidget(claimModeButton);
+
+        // Add clear selection button next to claim mode button
+        clearSelectionButton = new ClearSelectionButton(
+            width - (iconSize + margin) * 3,
+            margin,
+            iconSize,
+            iconSize,
+            button -> {
+                selectedGroups.clear();
+                updateClearSelectionButton();
+            }
+        );
+        clearSelectionButton.setTooltip(net.minecraft.client.gui.components.Tooltip.create(
+            Component.literal("Clear Selection")
+        ));
+        clearSelectionButton.visible = false;
+        addRenderableWidget(clearSelectionButton);
     }
 
     private void toggleClaimMode() {
@@ -165,11 +187,19 @@ public class WorldMapScreen extends Screen {
             selectedChunk = null;
             hoveredChunk = null;
         }
+
+        updateClearSelectionButton();
     }
 
     private void openGroupsScreen() {
         if (minecraft != null && player != null) {
             minecraft.setScreen(new com.talhanation.recruits.client.gui.group.RecruitsGroupListScreen(player));
+        }
+    }
+
+    private void updateClearSelectionButton() {
+        if (clearSelectionButton != null) {
+            clearSelectionButton.visible = !selectedGroups.isEmpty() && !claimMode;
         }
     }
 
@@ -243,6 +273,20 @@ public class WorldMapScreen extends Screen {
 
         // Render widgets (buttons)
         super.render(guiGraphics, mouseX, mouseY, partialTicks);
+
+        // Render right-click selection rectangle
+        if (isDraggingRightClick && !claimMode) {
+            int x1 = (int) Math.min(rightClickStartX, mouseX);
+            int y1 = (int) Math.min(rightClickStartY, mouseY);
+            int x2 = (int) Math.max(rightClickStartX, mouseX);
+            int y2 = (int) Math.max(rightClickStartY, mouseY);
+
+            // Fill with semi-transparent color
+            guiGraphics.fill(x1, y1, x2, y2, 0x4000FF00);
+
+            // Border
+            guiGraphics.renderOutline(x1, y1, x2 - x1, y2 - y1, 0xFF00FF00);
+        }
 
         // Render group icon tooltips when hovering (especially when zoom is low and text is hidden)
         if (scale <= 1.5) {
@@ -928,30 +972,20 @@ public class WorldMapScreen extends Screen {
                     lastMouseY = mouseY;
                     isDragging = true;
                 }
+
+                updateClearSelectionButton();
             }
 
-            if (button == 1) { // Right click - check if clicking on a group
-                boolean clickedOnGroup = false;
-                for (GroupIconInfo iconInfo : groupIcons) {
-                    if (iconInfo.contains((int)mouseX, (int)mouseY)) {
-                        clickedOnGroup = true;
+            if (button == 1) { // Right click - start drag selection
+                // Close any open menus first
+                contextMenu.close();
+                groupContextMenu.close();
+                claimInfoMenu.close();
 
-                        // If the group is not selected, select it exclusively
-                        if (!selectedGroups.contains(iconInfo.group.getUUID())) {
-                            selectedGroups.clear();
-                            selectedGroups.add(iconInfo.group.getUUID());
-                        }
-
-                        // Open group context menu for selected groups
-                        groupContextMenu.openAt((int) mouseX, (int) mouseY, selectedGroups);
-                        break;
-                    }
-                }
-
-                // If didn't click on a group, just clear the menu
-                if (!clickedOnGroup) {
-                    groupContextMenu.close();
-                }
+                // Start right-click drag selection
+                rightClickStartX = mouseX;
+                rightClickStartY = mouseY;
+                isDraggingRightClick = true;
             }
         }
 
@@ -966,6 +1000,87 @@ public class WorldMapScreen extends Screen {
 
         if (button == 0) {
             isDragging = false;
+        }
+
+        if (button == 1 && isDraggingRightClick) {
+            isDraggingRightClick = false;
+
+            if (!claimMode) {
+                // Calculate selection rectangle
+                int x1 = (int) Math.min(rightClickStartX, mouseX);
+                int y1 = (int) Math.min(rightClickStartY, mouseY);
+                int x2 = (int) Math.max(rightClickStartX, mouseX);
+                int y2 = (int) Math.max(rightClickStartY, mouseY);
+
+                // Check if it was a small drag (essentially a click)
+                boolean wasClick = Math.abs(mouseX - rightClickStartX) < 5 && Math.abs(mouseY - rightClickStartY) < 5;
+
+                if (wasClick) {
+                    // Single click behavior - check if clicking on a group
+                    boolean clickedOnGroup = false;
+                    for (GroupIconInfo iconInfo : groupIcons) {
+                        if (iconInfo.contains((int)mouseX, (int)mouseY)) {
+                            clickedOnGroup = true;
+
+                            // If the group is not selected, select it exclusively
+                            if (!selectedGroups.contains(iconInfo.group.getUUID())) {
+                                selectedGroups.clear();
+                                selectedGroups.add(iconInfo.group.getUUID());
+                            }
+
+                            // Open group context menu
+                            contextMenu.close();
+                            groupContextMenu.openAt((int) mouseX, (int) mouseY, selectedGroups);
+                            updateClearSelectionButton();
+                            return true;
+                        }
+                    }
+
+                    // Didn't click on a group - open normal context menu
+                    if (!clickedOnGroup) {
+                        groupContextMenu.close();
+
+                        double worldX = (mouseX - offsetX) / scale;
+                        double worldZ = (mouseY - offsetZ) / scale;
+                        clickedBlockX = (int) Math.floor(worldX);
+                        clickedBlockZ = (int) Math.floor(worldZ);
+
+                        this.contextMenu = new WorldMapContextMenu(this);
+                        contextMenu.openAt((int) mouseX, (int) mouseY);
+                        claimInfoMenu.close();
+                        return true;
+                    }
+                } else {
+                    // Drag selection - select/deselect groups in rectangle
+                    boolean isCtrlPressed = Screen.hasControlDown();
+
+                    if (!isCtrlPressed) {
+                        selectedGroups.clear();
+                    }
+
+                    for (GroupIconInfo iconInfo : groupIcons) {
+                        if (iconInfo.x >= x1 && iconInfo.x <= x2 &&
+                            iconInfo.y >= y1 && iconInfo.y <= y2) {
+
+                            if (isCtrlPressed && selectedGroups.contains(iconInfo.group.getUUID())) {
+                                // Ctrl pressed and already selected - deselect
+                                selectedGroups.remove(iconInfo.group.getUUID());
+                            } else {
+                                // Add to selection
+                                selectedGroups.add(iconInfo.group.getUUID());
+                            }
+                        }
+                    }
+
+                    // Open group context menu if there are selected groups
+                    if (!selectedGroups.isEmpty()) {
+                        contextMenu.close();
+                        groupContextMenu.openAt((int) mouseX, (int) mouseY, selectedGroups);
+                    }
+
+                    updateClearSelectionButton();
+                }
+            }
         }
 
         if (claimInfoMenu.isVisible()) {
@@ -1492,6 +1607,61 @@ public class WorldMapScreen extends Screen {
 
             // Render emerald item
             guiGraphics.renderFakeItem(EMERALD_ICON, iconX, iconY);
+        }
+    }
+
+    // Custom button class for clear selection
+    private static class ClearSelectionButton extends net.minecraft.client.gui.components.Button {
+
+        public ClearSelectionButton(int x, int y, int width, int height, OnPress onPress) {
+            super(x, y, width, height, Component.empty(), onPress, DEFAULT_NARRATION);
+        }
+
+        @Override
+        public void renderWidget(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
+            // Draw button background
+            int backgroundColor = this.isHovered() ? 0xFF555555 : 0xFF333333;
+            int borderColor = this.isHovered() ? 0xFFFFFFFF : 0xFF999999;
+
+            // Background
+            guiGraphics.fill(getX(), getY(), getX() + width, getY() + height, backgroundColor);
+
+            // Border
+            guiGraphics.fill(getX(), getY(), getX() + width, getY() + 1, borderColor); // Top
+            guiGraphics.fill(getX(), getY() + height - 1, getX() + width, getY() + height, borderColor); // Bottom
+            guiGraphics.fill(getX(), getY(), getX() + 1, getY() + height, borderColor); // Left
+            guiGraphics.fill(getX() + width - 1, getY(), getX() + width, getY() + height, borderColor); // Right
+
+            // Draw X icon centered
+            int centerX = getX() + width / 2;
+            int centerY = getY() + height / 2;
+            int size = 6; // Half-size of the X
+            int thickness = 2;
+
+            int color = this.isHovered() ? 0xFFFF4444 : 0xFFFFFFFF;
+
+            // Draw X - two diagonal lines
+            // Line from top-left to bottom-right
+            for (int i = -size; i <= size; i++) {
+                for (int t = 0; t < thickness; t++) {
+                    guiGraphics.fill(
+                        centerX + i, centerY + i + t,
+                        centerX + i + 1, centerY + i + t + 1,
+                        color
+                    );
+                }
+            }
+
+            // Line from top-right to bottom-left
+            for (int i = -size; i <= size; i++) {
+                for (int t = 0; t < thickness; t++) {
+                    guiGraphics.fill(
+                        centerX + i, centerY - i + t,
+                        centerX + i + 1, centerY - i + t + 1,
+                        color
+                    );
+                }
+            }
         }
     }
 

@@ -42,8 +42,7 @@ public class WorldMapContextMenu {
         itemStackClaimArea.setCount(worldMapScreen.getClaimCost(ClientManager.ownFaction));
 
         addEntry(TEXT_DIPLOMACY.getString(),
-                () -> (this.worldMapScreen.isClaimMode()
-                        && ClientManager.ownFaction != null
+                () -> (ClientManager.ownFaction != null
                         && this.worldMapScreen.selectedClaim != null && this.worldMapScreen.selectedClaim.getOwnerFaction() != null
                         && !ClientManager.ownFaction.getStringID().equals(this.worldMapScreen.selectedClaim.getOwnerFactionStringID())
                 ),
@@ -147,7 +146,7 @@ public class WorldMapContextMenu {
                 );
 
         addEntry(TEXT_TELEPORT_ADMIN.getString(),
-                () -> (this.worldMapScreen.isClaimMode() && worldMapScreen.isPlayerAdminAndCreative()),
+                worldMapScreen::isPlayerAdminAndCreative,
                 screen -> {
                     Main.SIMPLE_CHANNEL.sendToServer(new MessageTeleportPlayer(screen.getClickedBlockPos()));
                 },

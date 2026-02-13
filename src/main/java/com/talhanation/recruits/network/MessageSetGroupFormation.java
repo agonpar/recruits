@@ -2,8 +2,11 @@ package com.talhanation.recruits.network;
 
 import com.talhanation.recruits.CommandEvents;
 import com.talhanation.recruits.entities.AbstractRecruitEntity;
+import com.talhanation.recruits.util.FormationUtils;
 import de.maxhenkel.corelib.net.Message;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.network.NetworkEvent;
 
@@ -43,22 +46,8 @@ public class MessageSetGroupFormation implements Message<MessageSetGroupFormatio
         recruits.removeIf(recruit -> !recruit.isEffectedByCommand(this.playerUUID, this.groupUUID));
 
         if (!recruits.isEmpty()) {
-            // Calculate the center position of the group
-            double sumX = 0;
-            double sumZ = 0;
-            for (AbstractRecruitEntity recruit : recruits) {
-                sumX += recruit.getX();
-                sumZ += recruit.getZ();
-            }
-            double centerX = sumX / recruits.size();
-            double centerZ = sumZ / recruits.size();
-
-            // Use the center position to apply the formation
-            net.minecraft.world.phys.Vec3 centerPos = new net.minecraft.world.phys.Vec3(
-                centerX,
-                recruits.get(0).getY(),
-                centerZ
-            );
+            // Use the same method as "hold your position" command to calculate center
+            Vec3 centerPos = FormationUtils.getGeometricMedian(recruits, (ServerLevel) context.getSender().getCommandSenderWorld());
 
             // Apply the formation at the group's current center position
             CommandEvents.applyFormation(this.formation, recruits, context.getSender(), centerPos);
