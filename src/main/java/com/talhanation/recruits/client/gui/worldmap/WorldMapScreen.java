@@ -96,6 +96,11 @@ public class WorldMapScreen extends Screen {
     private double rightClickStartX, rightClickStartY;
     private ClearSelectionButton clearSelectionButton;
 
+    // Movement position selection mode
+    private boolean selectingMovementPosition = false;
+    private int pendingMovementCommand = -1; // -1 = none, 6 = move, 7 = forward, 8 = backward
+    private Set<UUID> pendingMovementGroups = new HashSet<>();
+
     public WorldMapScreen() {
         super(Component.literal(""));
         this.contextMenu = new WorldMapContextMenu(this);
@@ -112,6 +117,12 @@ public class WorldMapScreen extends Screen {
     public double getScale() { return scale; }
     public void setSelectedChunk(ChunkPos chunk) { this.selectedChunk = chunk; }
     public boolean isClaimMode() { return claimMode; }
+
+    public void startMovementPositionSelection(int movementCommand, Set<UUID> groups) {
+        this.selectingMovementPosition = true;
+        this.pendingMovementCommand = movementCommand;
+        this.pendingMovementGroups = new HashSet<>(groups);
+    }
 
     @Override
     protected void init() {
@@ -214,6 +225,28 @@ public class WorldMapScreen extends Screen {
         }
     }
 
+    private void sendMovementCommandWithPosition(int movementState, Set<UUID> groups, int worldX, int worldZ) {
+        if (groups == null || groups.isEmpty()) return;
+
+        UUID playerUUID = player.getUUID();
+        int formation = ClientManager.formationSelection;
+
+        // For Move, Forward, Backward commands, we need to create a custom message
+        // that includes the target position
+        for (UUID groupUUID : groups) {
+            Main.SIMPLE_CHANNEL.sendToServer(
+                new com.talhanation.recruits.network.MessageMovementWithPosition(
+                    playerUUID,
+                    movementState,
+                    groupUUID,
+                    formation,
+                    worldX,
+                    worldZ
+                )
+            );
+        }
+    }
+
     public void resetZoom() {
         scale = DEFAULT_SCALE;
         centerOnPlayer();
@@ -288,8 +321,29 @@ public class WorldMapScreen extends Screen {
             guiGraphics.renderOutline(x1, y1, x2 - x1, y2 - y1, 0xFF00FF00);
         }
 
+        // Render movement position selection indicator
+        if (selectingMovementPosition) {
+            // Draw crosshair at mouse position
+            int crosshairSize = 10;
+            int crosshairX = mouseX;
+            int crosshairY = mouseY;
+
+            // Draw crosshair
+            guiGraphics.fill(crosshairX - crosshairSize, crosshairY - 1, crosshairX + crosshairSize, crosshairY + 1, 0xFFFF0000);
+            guiGraphics.fill(crosshairX - 1, crosshairY - crosshairSize, crosshairX + 1, crosshairY + crosshairSize, 0xFFFF0000);
+
+            // Draw instruction text
+            String instruction = "Click to select movement position (ESC to cancel)";
+            int textWidth = font.width(instruction);
+            int textX = width / 2 - textWidth / 2;
+            int textY = 20;
+
+            guiGraphics.fill(textX - 4, textY - 2, textX + textWidth + 4, textY + 12, 0xAA000000);
+            guiGraphics.drawString(font, instruction, textX, textY, 0xFFFFFF00);
+        }
+
         // Render group icon tooltips when hovering (especially when zoom is low and text is hidden)
-        if (scale <= 1.5) {
+        if (scale <= 1.5 && !selectingMovementPosition) {
             for (GroupIconInfo iconInfo : groupIcons) {
                 if (iconInfo.contains(mouseX, mouseY)) {
                     renderGroupTooltip(guiGraphics, iconInfo, mouseX, mouseY);
@@ -890,6 +944,22 @@ public class WorldMapScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        // Handle movement position selection mode
+        if (selectingMovementPosition && button == 0) {
+            // Calculate world position from mouse click
+            double worldX = (mouseX - offsetX) / scale;
+            double worldZ = (mouseY - offsetZ) / scale;
+
+            // Send movement command with position
+            sendMovementCommandWithPosition(pendingMovementCommand, pendingMovementGroups, (int)worldX, (int)worldZ);
+
+            // Exit selection mode
+            selectingMovementPosition = false;
+            pendingMovementCommand = -1;
+            pendingMovementGroups.clear();
+            return true;
+        }
+
         // Check Group Context Menu first
         if (groupContextMenu.isVisible() && groupContextMenu.mouseClicked(mouseX, mouseY, button)) {
             return true;
@@ -1153,6 +1223,14 @@ public class WorldMapScreen extends Screen {
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
         if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
+            // Cancel movement position selection mode
+            if (selectingMovementPosition) {
+                selectingMovementPosition = false;
+                pendingMovementCommand = -1;
+                pendingMovementGroups.clear();
+                return true;
+            }
+
             if (claimInfoMenu.isVisible()) {
                 claimInfoMenu.close();
                 return true;

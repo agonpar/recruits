@@ -194,7 +194,8 @@ public class Main {
                 MessageAssignNearbyRecruitsInGroup.class,
                 MessageTeleportPlayer.class,
                 MessageUpdateGroupPositions.class,
-                MessageSetGroupFormation.class
+                MessageSetGroupFormation.class,
+                MessageMovementWithPosition.class
         };
 
 
