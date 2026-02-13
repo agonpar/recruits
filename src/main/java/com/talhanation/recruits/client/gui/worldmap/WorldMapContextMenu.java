@@ -42,7 +42,8 @@ public class WorldMapContextMenu {
         itemStackClaimArea.setCount(worldMapScreen.getClaimCost(ClientManager.ownFaction));
 
         addEntry(TEXT_DIPLOMACY.getString(),
-                () -> (ClientManager.ownFaction != null
+                () -> (this.worldMapScreen.isClaimMode()
+                        && ClientManager.ownFaction != null
                         && this.worldMapScreen.selectedClaim != null && this.worldMapScreen.selectedClaim.getOwnerFaction() != null
                         && !ClientManager.ownFaction.getStringID().equals(this.worldMapScreen.selectedClaim.getOwnerFactionStringID())
                 ),
@@ -50,7 +51,8 @@ public class WorldMapContextMenu {
         );
 
         addEntry(TEXT_CLAIM_CHUNK.getString(),
-                () -> (this.worldMapScreen.canClaimChunk(worldMapScreen.selectedChunk)
+                () -> (this.worldMapScreen.isClaimMode()
+                        && this.worldMapScreen.canClaimChunk(worldMapScreen.selectedChunk)
                         && (this.worldMapScreen.isPlayerFactionLeader() || this.worldMapScreen.isPlayerClaimLeader(worldMapScreen.getNeighborClaim(worldMapScreen.selectedChunk)))
                 ),
                 WorldMapScreen::claimChunk,
@@ -59,7 +61,8 @@ public class WorldMapContextMenu {
         );
 
         addEntry(TEXT_CLAIM_AREA.getString(),
-                () -> (this.worldMapScreen.canClaimArea(worldMapScreen.getClaimArea(worldMapScreen.selectedChunk))
+                () -> (this.worldMapScreen.isClaimMode()
+                        && this.worldMapScreen.canClaimArea(worldMapScreen.getClaimArea(worldMapScreen.selectedChunk))
                         && (this.worldMapScreen.isPlayerFactionLeader())
                 ),
                 WorldMapScreen::claimArea,
@@ -86,7 +89,8 @@ public class WorldMapContextMenu {
 
          */
         addEntry(TEXT_EDIT_CLAIM.getString(),
-                () -> (this.worldMapScreen.selectedClaim != null
+                () -> (this.worldMapScreen.isClaimMode()
+                        && this.worldMapScreen.selectedClaim != null
                         && this.worldMapScreen.isPlayerFactionLeader(this.worldMapScreen.selectedClaim.getOwnerFaction())
                         || this.worldMapScreen.isPlayerClaimLeader()
                 ),
@@ -97,7 +101,8 @@ public class WorldMapContextMenu {
         );
 
         addEntry(TEXT_REMOVE_CHUNK.getString(),
-                () -> (this.worldMapScreen.selectedChunk != null && this.worldMapScreen.selectedClaim != null
+                () -> (this.worldMapScreen.isClaimMode()
+                        && this.worldMapScreen.selectedChunk != null && this.worldMapScreen.selectedClaim != null
                         && worldMapScreen.canRemoveChunk(worldMapScreen.selectedChunk, worldMapScreen.selectedClaim)
                         && (this.worldMapScreen.isPlayerFactionLeader(worldMapScreen.selectedClaim.getOwnerFaction()) || this.worldMapScreen.isPlayerClaimLeader(worldMapScreen.selectedClaim))
                 ),
@@ -115,7 +120,8 @@ public class WorldMapContextMenu {
 
         //ADMIN STUFF
         addEntry(TEXT_REMOVE_CHUNK_ADMIN.getString(),
-                () -> (this.worldMapScreen.selectedChunk != null && this.worldMapScreen.selectedClaim != null
+                () -> (this.worldMapScreen.isClaimMode()
+                        && this.worldMapScreen.selectedChunk != null && this.worldMapScreen.selectedClaim != null
                         && this.worldMapScreen.isPlayerAdminAndCreative()
                         && worldMapScreen.canRemoveChunk(worldMapScreen.selectedChunk, worldMapScreen.selectedClaim)
                         && !(this.worldMapScreen.isPlayerFactionLeader(worldMapScreen.selectedClaim.getOwnerFaction()) || this.worldMapScreen.isPlayerClaimLeader(worldMapScreen.selectedClaim))
@@ -131,7 +137,7 @@ public class WorldMapContextMenu {
         );
 
         addEntry(TEXT_DELETE_CLAIM_ADMIN.getString(),
-                () -> (this.worldMapScreen.isPlayerAdminAndCreative() && this.worldMapScreen.selectedClaim != null),
+                () -> (this.worldMapScreen.isClaimMode() && this.worldMapScreen.isPlayerAdminAndCreative() && this.worldMapScreen.selectedClaim != null),
                 screen -> {
                     screen.selectedClaim.isRemoved = true;
                     Main.SIMPLE_CHANNEL.sendToServer(new MessageUpdateClaim(screen.selectedClaim));
@@ -141,7 +147,7 @@ public class WorldMapContextMenu {
                 );
 
         addEntry(TEXT_TELEPORT_ADMIN.getString(),
-                worldMapScreen::isPlayerAdminAndCreative,
+                () -> (this.worldMapScreen.isClaimMode() && worldMapScreen.isPlayerAdminAndCreative()),
                 screen -> {
                     Main.SIMPLE_CHANNEL.sendToServer(new MessageTeleportPlayer(screen.getClickedBlockPos()));
                 },

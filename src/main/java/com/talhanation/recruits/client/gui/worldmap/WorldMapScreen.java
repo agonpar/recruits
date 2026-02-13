@@ -63,19 +63,22 @@ public class WorldMapScreen extends Screen {
     private ClaimInfoMenu claimInfoMenu;
     public RecruitsRoute selectedRoute;
     private GroupIconButton groupsButton;
+    private GroupContextMenu groupContextMenu;
 
     // Store group icon positions for hover tooltips
     private static class GroupIconInfo {
         int x, y, size;
         String name;
         int memberCount;
+        RecruitsGroup group;
 
-        GroupIconInfo(int x, int y, int size, String name, int memberCount) {
+        GroupIconInfo(int x, int y, int size, String name, int memberCount, RecruitsGroup group) {
             this.x = x;
             this.y = y;
             this.size = size;
             this.name = name;
             this.memberCount = memberCount;
+            this.group = group;
         }
 
         boolean contains(int mouseX, int mouseY) {
@@ -84,11 +87,15 @@ public class WorldMapScreen extends Screen {
         }
     }
     private List<GroupIconInfo> groupIcons = new ArrayList<>();
+    private Set<UUID> selectedGroups = new HashSet<>();
+    private boolean claimMode = false; // Claim mode disabled by default
+    private ClaimModeButton claimModeButton;
 
     public WorldMapScreen() {
         super(Component.literal(""));
         this.contextMenu = new WorldMapContextMenu(this);
         this.claimInfoMenu = new ClaimInfoMenu(this);
+        this.groupContextMenu = new GroupContextMenu(this);
         this.tileManager = ChunkTileManager.getInstance();
         this.player = Minecraft.getInstance().player;
     }
@@ -99,6 +106,7 @@ public class WorldMapScreen extends Screen {
     public boolean isPlayerAdminAndCreative() { return player.hasPermissions(2) && player.isCreative(); }
     public double getScale() { return scale; }
     public void setSelectedChunk(ChunkPos chunk) { this.selectedChunk = chunk; }
+    public boolean isClaimMode() { return claimMode; }
 
     @Override
     protected void init() {
@@ -127,6 +135,36 @@ public class WorldMapScreen extends Screen {
             Component.literal("Manage Groups")
         ));
         addRenderableWidget(groupsButton);
+
+        // Add claim mode toggle button next to groups button
+        claimModeButton = new ClaimModeButton(
+            width - (iconSize + margin) * 2,
+            margin,
+            iconSize,
+            iconSize,
+            claimMode,
+            button -> toggleClaimMode()
+        );
+
+        claimModeButton.setTooltip(net.minecraft.client.gui.components.Tooltip.create(
+            Component.literal("Toggle Claim Mode")
+        ));
+        addRenderableWidget(claimModeButton);
+    }
+
+    private void toggleClaimMode() {
+        claimMode = !claimMode;
+        claimModeButton.setClaimModeActive(claimMode);
+
+        // Clear selections when toggling modes
+        if (claimMode) {
+            // Entering claim mode: clear group selections
+            selectedGroups.clear();
+        } else {
+            // Exiting claim mode: clear chunk selections
+            selectedChunk = null;
+            hoveredChunk = null;
+        }
     }
 
     private void openGroupsScreen() {
@@ -161,18 +199,29 @@ public class WorldMapScreen extends Screen {
 
         ClaimRenderer.renderClaimsOverlay(guiGraphics, this.selectedClaim, this.offsetX, this.offsetZ, scale);
 
-        if (contextMenu.isVisible()) {
-            String entryTag = contextMenu.getHoveredEntryTag();
-            if (entryTag != null){
-                if(entryTag.contains("bufferzone")) {
-                    ClaimRenderer.renderBufferZone(guiGraphics, offsetX, offsetZ, scale);
+        // Only render claim-related elements when in claim mode
+        if (claimMode) {
+            if (contextMenu.isVisible()) {
+                String entryTag = contextMenu.getHoveredEntryTag();
+                if (entryTag != null){
+                    if(entryTag.contains("bufferzone")) {
+                        ClaimRenderer.renderBufferZone(guiGraphics, offsetX, offsetZ, scale);
+                    }
+                    if(entryTag.contains("area")){
+                        ClaimRenderer.renderAreaPreview(guiGraphics, getClaimArea(selectedChunk) , offsetX, offsetZ, scale);
+                    }
+                    if(entryTag.contains("chunk")){
+                        ClaimRenderer.renderAreaPreview(guiGraphics, getClaimableChunks(selectedChunk, 16) , offsetX, offsetZ, scale);
+                    }
                 }
-                if(entryTag.contains("area")){
-                    ClaimRenderer.renderAreaPreview(guiGraphics, getClaimArea(selectedChunk) , offsetX, offsetZ, scale);
-                }
-                if(entryTag.contains("chunk")){
-                    ClaimRenderer.renderAreaPreview(guiGraphics, getClaimableChunks(selectedChunk, 16) , offsetX, offsetZ, scale);
-                }
+            }
+
+            if (selectedChunk != null && (selectedClaim == null || contextMenu.isVisible())) {
+                renderChunkOutline(guiGraphics, selectedChunk.x, selectedChunk.z, CHUNK_SELECTION_COLOR);
+            }
+
+            if (hoveredChunk != null) {
+                renderChunkHighlight(guiGraphics, hoveredChunk.x, hoveredChunk.z);
             }
         }
 
@@ -181,14 +230,6 @@ public class WorldMapScreen extends Screen {
         }
 
         renderRecruitGroups(guiGraphics);
-
-        if (selectedChunk != null && (selectedClaim == null || contextMenu.isVisible())) {
-            renderChunkOutline(guiGraphics, selectedChunk.x, selectedChunk.z, CHUNK_SELECTION_COLOR);
-        }
-
-        if (hoveredChunk != null) {
-            renderChunkHighlight(guiGraphics, hoveredChunk.x, hoveredChunk.z);
-        }
 
         if(selectedRoute != null){
             renderRoute(guiGraphics);
@@ -200,16 +241,7 @@ public class WorldMapScreen extends Screen {
 
         //renderFPS(guiGraphics);
 
-        contextMenu.render(guiGraphics, this);
-
-        if (selectedClaim != null && claimInfoMenu.isVisible()) {
-            Point p = getClaimInfoMenuPosition(selectedClaim, claimInfoMenu.width, claimInfoMenu.height
-            );
-            claimInfoMenu.setPosition(p.x, p.y);
-            claimInfoMenu.render(guiGraphics);
-        }
-
-        // Render widgets (buttons) on top of everything
+        // Render widgets (buttons)
         super.render(guiGraphics, mouseX, mouseY, partialTicks);
 
         // Render group icon tooltips when hovering (especially when zoom is low and text is hidden)
@@ -221,6 +253,17 @@ public class WorldMapScreen extends Screen {
                 }
             }
         }
+
+        if (selectedClaim != null && claimInfoMenu.isVisible()) {
+            Point p = getClaimInfoMenuPosition(selectedClaim, claimInfoMenu.width, claimInfoMenu.height
+            );
+            claimInfoMenu.setPosition(p.x, p.y);
+            claimInfoMenu.render(guiGraphics);
+        }
+
+        // Render context menus LAST to ensure they're on top of everything including coordinates
+        contextMenu.render(guiGraphics, this);
+        groupContextMenu.render(guiGraphics, this);
     }
 
     private void renderGroupTooltip(GuiGraphics guiGraphics, GroupIconInfo iconInfo, int mouseX, int mouseY) {
@@ -581,13 +624,23 @@ public class WorldMapScreen extends Screen {
 
             // Reset shader color
             RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
+
+            // Draw selection border if this group is selected
+            if (selectedGroups.contains(group.getUUID())) {
+                RenderSystem.disableBlend();
+                guiGraphics.fill(-9, -9, 9, -8, 0xFFFFFF00); // Top
+                guiGraphics.fill(-9, 8, 9, 9, 0xFFFFFF00);   // Bottom
+                guiGraphics.fill(-9, -9, -8, 9, 0xFFFFFF00); // Left
+                guiGraphics.fill(8, -9, 9, 9, 0xFFFFFF00);   // Right
+                RenderSystem.enableBlend();
+            }
         }
 
         pose.popPose();
 
         // Store icon info for hover detection
         int iconSize = (int)(16 * iconScale);
-        groupIcons.add(new GroupIconInfo(pixelX, pixelZ, iconSize, group.getName(), memberCount));
+        groupIcons.add(new GroupIconInfo(pixelX, pixelZ, iconSize, group.getName(), memberCount, group));
 
         // Render member count and group name if zoom is high enough
         if (scale > 1.5) {
@@ -793,7 +846,12 @@ public class WorldMapScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        // Check Claim Info Menu first
+        // Check Group Context Menu first
+        if (groupContextMenu.isVisible() && groupContextMenu.mouseClicked(mouseX, mouseY, button)) {
+            return true;
+        }
+
+        // Check Claim Info Menu
         if (claimInfoMenu.isVisible() && claimInfoMenu.mouseClicked(mouseX, mouseY, button)) {
             return true;
         }
@@ -803,33 +861,98 @@ public class WorldMapScreen extends Screen {
                 return true;
             }
         }
-        if(hoveredChunk != null)  selectedChunk = hoveredChunk;
 
-        RecruitsClaim clickedClaim = ClaimRenderer.getClaimAtPosition(mouseX, mouseY, offsetX, offsetZ, scale);
-        if (clickedClaim != null) {
-            selectedClaim = clickedClaim;
-            claimInfoMenu.openForClaim(selectedClaim, (int) mouseX, (int) mouseY);
+        // CLAIM MODE: Handle chunk and claim interactions
+        if (claimMode) {
+            if(hoveredChunk != null)  selectedChunk = hoveredChunk;
+
+            RecruitsClaim clickedClaim = ClaimRenderer.getClaimAtPosition(mouseX, mouseY, offsetX, offsetZ, scale);
+            if (clickedClaim != null) {
+                selectedClaim = clickedClaim;
+                claimInfoMenu.openForClaim(selectedClaim, (int) mouseX, (int) mouseY);
+            }
+            else {
+                selectedClaim = null;
+                claimInfoMenu.close();
+            }
+
+            if (button == 1) { // Right click - open context menu for claiming
+                double worldX = (mouseX - offsetX) / scale;
+                double worldZ = (mouseY - offsetZ) / scale;
+                clickedBlockX = (int) Math.floor(worldX);
+                clickedBlockZ = (int) Math.floor(worldZ);
+
+                this.contextMenu = new WorldMapContextMenu(this);
+                contextMenu.openAt((int) mouseX, (int) mouseY);
+                claimInfoMenu.close();
+            }
+
+            if (button == 0) { // Left click - prepare for dragging
+                lastMouseX = mouseX;
+                lastMouseY = mouseY;
+                isDragging = true;
+            }
         }
+        // TROOP MODE: Handle group interactions
         else {
-            selectedClaim = null;
-            claimInfoMenu.close();
-        }
+            if (button == 0) { // Left click
+                // Check if clicking on a group icon
+                boolean clickedOnGroup = false;
+                for (GroupIconInfo iconInfo : groupIcons) {
+                    if (iconInfo.contains((int)mouseX, (int)mouseY)) {
+                        clickedOnGroup = true;
 
-        if (button == 1) { // Rechtsklick
-            double worldX = (mouseX - offsetX) / scale;
-            double worldZ = (mouseY - offsetZ) / scale;
-            clickedBlockX = (int) Math.floor(worldX);
-            clickedBlockZ = (int) Math.floor(worldZ);
+                        // Check if Ctrl is pressed
+                        boolean isCtrlPressed = Screen.hasControlDown();
 
-            this.contextMenu = new WorldMapContextMenu(this);
-            contextMenu.openAt((int) mouseX, (int) mouseY);
-            claimInfoMenu.close();
-        }
+                        if (isCtrlPressed) {
+                            // Toggle selection of this group
+                            if (selectedGroups.contains(iconInfo.group.getUUID())) {
+                                selectedGroups.remove(iconInfo.group.getUUID());
+                            } else {
+                                selectedGroups.add(iconInfo.group.getUUID());
+                            }
+                        } else {
+                            // Clear previous selection and select only this group
+                            selectedGroups.clear();
+                            selectedGroups.add(iconInfo.group.getUUID());
+                        }
 
-        if (button == 0) { // Linksklick
-            lastMouseX = mouseX;
-            lastMouseY = mouseY;
-            isDragging = true;
+                        break;
+                    }
+                }
+
+                // If didn't click on a group, prepare for dragging
+                if (!clickedOnGroup) {
+                    lastMouseX = mouseX;
+                    lastMouseY = mouseY;
+                    isDragging = true;
+                }
+            }
+
+            if (button == 1) { // Right click - check if clicking on a group
+                boolean clickedOnGroup = false;
+                for (GroupIconInfo iconInfo : groupIcons) {
+                    if (iconInfo.contains((int)mouseX, (int)mouseY)) {
+                        clickedOnGroup = true;
+
+                        // If the group is not selected, select it exclusively
+                        if (!selectedGroups.contains(iconInfo.group.getUUID())) {
+                            selectedGroups.clear();
+                            selectedGroups.add(iconInfo.group.getUUID());
+                        }
+
+                        // Open group context menu for selected groups
+                        groupContextMenu.openAt((int) mouseX, (int) mouseY, selectedGroups);
+                        break;
+                    }
+                }
+
+                // If didn't click on a group, just clear the menu
+                if (!clickedOnGroup) {
+                    groupContextMenu.close();
+                }
+            }
         }
 
         return super.mouseClicked(mouseX, mouseY, button);
@@ -903,7 +1026,13 @@ public class WorldMapScreen extends Screen {
         int worldZ = (int) ((mouseY - offsetZ) / scale);
         hoverBlockX = (int)Math.floor(worldX);
         hoverBlockZ = (int)Math.floor(worldZ);
-        hoveredChunk = new ChunkPos(hoverBlockX >> 4, hoverBlockZ >> 4);
+
+        // Only update hovered chunk when in claim mode
+        if (claimMode) {
+            hoveredChunk = new ChunkPos(hoverBlockX >> 4, hoverBlockZ >> 4);
+        } else {
+            hoveredChunk = null;
+        }
     }
 
     @Override
@@ -1324,6 +1453,49 @@ public class WorldMapScreen extends Screen {
         }
     }
 
+    // Custom button class for claim mode toggle
+    private static class ClaimModeButton extends net.minecraft.client.gui.components.Button {
+        private static final ItemStack EMERALD_ICON = new ItemStack(Items.EMERALD);
+        private boolean claimModeActive;
+
+        public ClaimModeButton(int x, int y, int width, int height, boolean initialState, OnPress onPress) {
+            super(x, y, width, height, Component.empty(), onPress, DEFAULT_NARRATION);
+            this.claimModeActive = initialState;
+        }
+
+        public void setClaimModeActive(boolean active) {
+            this.claimModeActive = active;
+        }
+
+        @Override
+        public void renderWidget(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
+            // Draw button background - highlight if active
+            int backgroundColor = claimModeActive ? 0xFF4444AA : (this.isHovered() ? 0xFF555555 : 0xFF333333);
+            int borderColor = claimModeActive ? 0xFF6666FF : (this.isHovered() ? 0xFFFFFFFF : 0xFF999999);
+
+            // Background
+            guiGraphics.fill(getX(), getY(), getX() + width, getY() + height, backgroundColor);
+
+            // Border
+            guiGraphics.fill(getX(), getY(), getX() + width, getY() + 1, borderColor); // Top
+            guiGraphics.fill(getX(), getY() + height - 1, getX() + width, getY() + height, borderColor); // Bottom
+            guiGraphics.fill(getX(), getY(), getX() + 1, getY() + height, borderColor); // Left
+            guiGraphics.fill(getX() + width - 1, getY(), getX() + width, getY() + height, borderColor); // Right
+
+            // Draw emerald icon centered
+            RenderSystem.enableBlend();
+            RenderSystem.defaultBlendFunc();
+
+            int iconSize = 16;
+            int iconX = getX() + (width - iconSize) / 2;
+            int iconY = getY() + (height - iconSize) / 2;
+
+            // Render emerald item
+            guiGraphics.renderFakeItem(EMERALD_ICON, iconX, iconY);
+        }
+    }
+
 
 }
+
 

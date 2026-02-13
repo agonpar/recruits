@@ -193,7 +193,8 @@ public class Main {
                 MessageSplitGroup.class,
                 MessageAssignNearbyRecruitsInGroup.class,
                 MessageTeleportPlayer.class,
-                MessageUpdateGroupPositions.class
+                MessageUpdateGroupPositions.class,
+                MessageSetGroupFormation.class
         };
 
 
