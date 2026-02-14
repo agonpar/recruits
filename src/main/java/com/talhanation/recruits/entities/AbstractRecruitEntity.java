@@ -88,6 +88,7 @@ public abstract class AbstractRecruitEntity extends AbstractInventoryEntity{
     private static final EntityDataAccessor<Boolean> SHOULD_PROTECT = SynchedEntityData.defineId(AbstractRecruitEntity.class, EntityDataSerializers.BOOLEAN);
     private static final EntityDataAccessor<Boolean> SHOULD_HOLD_POS = SynchedEntityData.defineId(AbstractRecruitEntity.class, EntityDataSerializers.BOOLEAN);
     private static final EntityDataAccessor<Boolean> SHOULD_MOVE_POS = SynchedEntityData.defineId(AbstractRecruitEntity.class, EntityDataSerializers.BOOLEAN);
+    private static final EntityDataAccessor<Boolean> IS_BACK_TO_POSITION = SynchedEntityData.defineId(AbstractRecruitEntity.class, EntityDataSerializers.BOOLEAN);
     private static final EntityDataAccessor<Optional<BlockPos>> HOLD_POS = SynchedEntityData.defineId(AbstractRecruitEntity.class, EntityDataSerializers.OPTIONAL_BLOCK_POS);
     private static final EntityDataAccessor<Optional<BlockPos>> MOVE_POS = SynchedEntityData.defineId(AbstractRecruitEntity.class, EntityDataSerializers.OPTIONAL_BLOCK_POS);
     private static final EntityDataAccessor<Optional<BlockPos>> UPKEEP_POS = SynchedEntityData.defineId(AbstractRecruitEntity.class, EntityDataSerializers.OPTIONAL_BLOCK_POS);
@@ -346,6 +347,7 @@ public abstract class AbstractRecruitEntity extends AbstractInventoryEntity{
         this.entityData.define(SHOULD_PROTECT, false);
         this.entityData.define(SHOULD_HOLD_POS, false);
         this.entityData.define(SHOULD_MOVE_POS, false);
+        this.entityData.define(IS_BACK_TO_POSITION, false);
         this.entityData.define(FLEEING, false);
         this.entityData.define(STATE, 0);
         this.entityData.define(VARIANT, 0);
@@ -639,6 +641,11 @@ public abstract class AbstractRecruitEntity extends AbstractInventoryEntity{
     public boolean getShouldMovePos() {
         return entityData.get(SHOULD_MOVE_POS);
     }
+
+    public boolean getIsBackToPosition() {
+        return entityData.get(IS_BACK_TO_POSITION);
+    }
+
     public boolean getShouldHoldPos() {
         return entityData.get(SHOULD_HOLD_POS);
     }
@@ -724,8 +731,15 @@ public abstract class AbstractRecruitEntity extends AbstractInventoryEntity{
     }
 
     public Vec3 getHoldPos(){
-        return this.holdPosVec;
-        //return entityData.get(HOLD_POS).orElse(null);
+        if (this.holdPosVec != null) {
+            return this.holdPosVec;
+        }
+        // Fallback to synced data (important for client-side)
+        BlockPos blockPos = entityData.get(HOLD_POS).orElse(null);
+        if (blockPos != null) {
+            return new Vec3(blockPos.getX(), blockPos.getY(), blockPos.getZ());
+        }
+        return null;
     }
 
     @Nullable
@@ -885,6 +899,11 @@ public abstract class AbstractRecruitEntity extends AbstractInventoryEntity{
     public void setShouldMovePos(boolean bool){
         entityData.set(SHOULD_MOVE_POS, bool);
     }
+
+    public void setIsBackToPosition(boolean bool){
+        entityData.set(IS_BACK_TO_POSITION, bool);
+    }
+
     public void setShouldProtect(boolean bool){
         entityData.set(SHOULD_PROTECT, bool);
     }
@@ -953,12 +972,14 @@ public abstract class AbstractRecruitEntity extends AbstractInventoryEntity{
                 setShouldHoldPos(false);
                 setShouldProtect(false);
                 setShouldMovePos(false);
+                setIsBackToPosition(false);
             }
             case 1 -> {
                 setShouldFollow(true);
                 setShouldHoldPos(false);
                 setShouldProtect(false);
                 setShouldMovePos(false);
+                setIsBackToPosition(false);
             }
             case 2 -> {
                 setShouldFollow(false);
@@ -967,12 +988,18 @@ public abstract class AbstractRecruitEntity extends AbstractInventoryEntity{
                 setHoldPos(position());
                 setShouldProtect(false);
                 setShouldMovePos(false);
+                setIsBackToPosition(false);
             }
             case 3 -> {
                 setShouldFollow(false);
                 setShouldHoldPos(true);
+                // If no hold position is set, use current position
+                if (getHoldPos() == null) {
+                    setHoldPos(position());
+                }
                 setShouldProtect(false);
                 setShouldMovePos(false);
+                setIsBackToPosition(true);
             }
             case 4 -> {
                 setShouldFollow(false);
@@ -981,6 +1008,7 @@ public abstract class AbstractRecruitEntity extends AbstractInventoryEntity{
                 setHoldPos(this.getOwner().position());
                 setShouldProtect(false);
                 setShouldMovePos(false);
+                setIsBackToPosition(true);
                 state = 3;
             }
             case 5 -> {
@@ -988,6 +1016,7 @@ public abstract class AbstractRecruitEntity extends AbstractInventoryEntity{
                 setShouldHoldPos(false);
                 setShouldProtect(true);
                 setShouldMovePos(false);
+                setIsBackToPosition(false);
             }
         }
 
@@ -995,7 +1024,8 @@ public abstract class AbstractRecruitEntity extends AbstractInventoryEntity{
     }
 
     public void setHoldPos(Vec3 holdPos){
-        //this.entityData.set(HOLD_POS, Optional.of(holdPos));
+        BlockPos blockPos = new BlockPos((int) holdPos.x, (int) holdPos.y, (int) holdPos.z);
+        this.entityData.set(HOLD_POS, Optional.of(blockPos));
         this.holdPosVec = holdPos;
     }
     public void setMovePos(BlockPos holdPos){
@@ -1005,6 +1035,7 @@ public abstract class AbstractRecruitEntity extends AbstractInventoryEntity{
 
     public void clearHoldPos(){
         this.entityData.set(HOLD_POS, Optional.empty());
+        this.holdPosVec = null;
     }
 
     public void clearMovePos(){

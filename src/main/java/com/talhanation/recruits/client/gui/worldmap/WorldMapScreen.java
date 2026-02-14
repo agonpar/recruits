@@ -95,11 +95,26 @@ public class WorldMapScreen extends Screen {
     private boolean isDraggingRightClick = false;
     private double rightClickStartX, rightClickStartY;
     private ClearSelectionButton clearSelectionButton;
+    private ActiveActionsPanel activeActionsPanel;
 
     // Movement position selection mode
     private boolean selectingMovementPosition = false;
     private int pendingMovementCommand = -1; // -1 = none, 6 = move, 7 = forward, 8 = backward
     private Set<UUID> pendingMovementGroups = new HashSet<>();
+
+    // Store last movement direction per group (for Forward/Backward commands)
+    // Key: GroupUUID, Value: [dirX, dirZ] normalized direction vector
+    private static final java.util.Map<UUID, double[]> lastMovementDirections = new java.util.HashMap<>();
+
+    // Store target positions for groups (to show X marker and dashed line)
+    // Key: GroupUUID, Value: [targetX, targetZ]
+    private static final java.util.Map<UUID, int[]> groupTargetPositions = new java.util.HashMap<>();
+
+    // Store groups whose markers have been manually cancelled (to prevent auto-recreation)
+    private static final java.util.Set<UUID> cancelledMarkers = new java.util.HashSet<>();
+
+    // Animation offset for dashed lines
+    private float dashedLineOffset = 0.0f;
 
     public WorldMapScreen() {
         super(Component.literal(""));
@@ -122,6 +137,93 @@ public class WorldMapScreen extends Screen {
         this.selectingMovementPosition = true;
         this.pendingMovementCommand = movementCommand;
         this.pendingMovementGroups = new HashSet<>(groups);
+    }
+
+    public boolean hasLastMovementDirection(Set<UUID> groups) {
+        if (groups == null || groups.isEmpty()) return false;
+        // Check if at least one group has a stored direction
+        for (UUID groupUUID : groups) {
+            if (lastMovementDirections.containsKey(groupUUID)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public void removeGroupTargetPosition(UUID groupUUID) {
+        groupTargetPositions.remove(groupUUID);
+        // Mark as manually cancelled to prevent auto-recreation
+        cancelledMarkers.add(groupUUID);
+    }
+
+    public void allowGroupTargetMarker(UUID groupUUID) {
+        // Remove from cancelled markers to allow new markers
+        cancelledMarkers.remove(groupUUID);
+    }
+
+    public void ensureTargetMarkerForGroup(UUID groupUUID, net.minecraft.core.BlockPos targetPos) {
+        // Don't create markers for groups that have been manually cancelled
+        if (cancelledMarkers.contains(groupUUID)) {
+            return;
+        }
+
+        // Add or update marker position
+        if (targetPos != null) {
+            int[] existingPos = groupTargetPositions.get(groupUUID);
+            int[] newPos = new int[]{targetPos.getX(), targetPos.getZ()};
+
+            // Only update if position changed or doesn't exist
+            if (existingPos == null || existingPos[0] != newPos[0] || existingPos[1] != newPos[1]) {
+                groupTargetPositions.put(groupUUID, newPos);
+            }
+        }
+    }
+
+    public void executeForwardBackwardMovement(int movementState, Set<UUID> groups) {
+        if (groups == null || groups.isEmpty()) return;
+
+        UUID playerUUID = player.getUUID();
+        int formation = ClientManager.formationSelection;
+        int distance = 10; // 10 blocks forward or backward
+        if (movementState == 8) distance = -distance; // Negative for backward
+
+        // Send individual commands for each group using their saved direction
+        for (UUID groupUUID : groups) {
+            // Remove from cancelled markers (new movement command)
+            cancelledMarkers.remove(groupUUID);
+
+            double[] direction = lastMovementDirections.get(groupUUID);
+            if (direction != null) {
+                // Find group's current position
+                for (GroupIconInfo iconInfo : groupIcons) {
+                    if (iconInfo.group.getUUID().equals(groupUUID)) {
+                        // Convert icon pixel position to world coordinates
+                        double groupWorldX = (iconInfo.x - offsetX) / scale;
+                        double groupWorldZ = (iconInfo.y - offsetZ) / scale;
+
+                        // Calculate new position
+                        int newX = (int)(groupWorldX + direction[0] * distance);
+                        int newZ = (int)(groupWorldZ + direction[1] * distance);
+
+                        // Store target position for rendering X marker and dashed line
+                        groupTargetPositions.put(groupUUID, new int[]{newX, newZ});
+
+                        // Send command for this group
+                        Main.SIMPLE_CHANNEL.sendToServer(
+                            new com.talhanation.recruits.network.MessageMovementWithPosition(
+                                playerUUID,
+                                movementState,
+                                groupUUID,
+                                formation,
+                                newX,
+                                newZ
+                            )
+                        );
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     @Override
@@ -183,6 +285,15 @@ public class WorldMapScreen extends Screen {
         ));
         clearSelectionButton.visible = false;
         addRenderableWidget(clearSelectionButton);
+
+        // Add active actions panel below the control buttons
+        int panelX = width - 200 - margin;
+        int panelY = margin + iconSize + 10; // Below the buttons
+        int panelWidth = 200;
+        int panelHeight = height - panelY - margin - 30; // Leave space for coordinates at bottom
+
+        activeActionsPanel = new ActiveActionsPanel(this, panelX, panelY, panelWidth, panelHeight, player);
+        addRenderableWidget(activeActionsPanel);
     }
 
     private void toggleClaimMode() {
@@ -231,8 +342,43 @@ public class WorldMapScreen extends Screen {
         UUID playerUUID = player.getUUID();
         int formation = ClientManager.formationSelection;
 
-        // For Move, Forward, Backward commands, we need to create a custom message
-        // that includes the target position
+        // For Move command (state 6), save the direction for each group
+        if (movementState == 6) {
+            for (UUID groupUUID : groups) {
+                // Remove from cancelled markers (new movement command)
+                cancelledMarkers.remove(groupUUID);
+
+                // Calculate direction from group's current position to target
+                for (GroupIconInfo iconInfo : groupIcons) {
+                    if (iconInfo.group.getUUID().equals(groupUUID)) {
+                        // Convert icon pixel position to world coordinates
+                        double groupWorldX = (iconInfo.x - offsetX) / scale;
+                        double groupWorldZ = (iconInfo.y - offsetZ) / scale;
+
+                        // Calculate direction vector
+                        double dirX = worldX - groupWorldX;
+                        double dirZ = worldZ - groupWorldZ;
+
+                        // Normalize the direction vector
+                        double length = Math.sqrt(dirX * dirX + dirZ * dirZ);
+                        if (length > 0.001) { // Avoid division by zero
+                            dirX /= length;
+                            dirZ /= length;
+
+                            // Store the normalized direction
+                            lastMovementDirections.put(groupUUID, new double[]{dirX, dirZ});
+                        }
+
+                        // Store target position for rendering X marker and dashed line
+                        groupTargetPositions.put(groupUUID, new int[]{worldX, worldZ});
+
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Send Move command to all groups with the selected position
         for (UUID groupUUID : groups) {
             Main.SIMPLE_CHANNEL.sendToServer(
                 new com.talhanation.recruits.network.MessageMovementWithPosition(
@@ -294,6 +440,9 @@ public class WorldMapScreen extends Screen {
 
         renderRecruitGroups(guiGraphics);
 
+        // Render target markers and dashed lines for groups with active movement commands
+        renderGroupTargetMarkers(guiGraphics);
+
         if(selectedRoute != null){
             renderRoute(guiGraphics);
         }
@@ -323,14 +472,36 @@ public class WorldMapScreen extends Screen {
 
         // Render movement position selection indicator
         if (selectingMovementPosition) {
-            // Draw crosshair at mouse position
-            int crosshairSize = 10;
-            int crosshairX = mouseX;
-            int crosshairY = mouseY;
+            // Draw X at mouse position (green color)
+            int xSize = 6; // Smaller X (was 10 for crosshair)
+            int xX = mouseX;
+            int xY = mouseY;
+            int thickness = 2;
 
-            // Draw crosshair
-            guiGraphics.fill(crosshairX - crosshairSize, crosshairY - 1, crosshairX + crosshairSize, crosshairY + 1, 0xFFFF0000);
-            guiGraphics.fill(crosshairX - 1, crosshairY - crosshairSize, crosshairX + 1, crosshairY + crosshairSize, 0xFFFF0000);
+            int color = 0xFF00FF00; // Green color
+
+            // Draw X - two diagonal lines
+            // Line from top-left to bottom-right
+            for (int i = -xSize; i <= xSize; i++) {
+                for (int t = 0; t < thickness; t++) {
+                    guiGraphics.fill(
+                        xX + i, xY + i + t,
+                        xX + i + 1, xY + i + t + 1,
+                        color
+                    );
+                }
+            }
+
+            // Line from top-right to bottom-left
+            for (int i = -xSize; i <= xSize; i++) {
+                for (int t = 0; t < thickness; t++) {
+                    guiGraphics.fill(
+                        xX + i, xY - i + t,
+                        xX + i + 1, xY - i + t + 1,
+                        color
+                    );
+                }
+            }
 
             // Draw instruction text
             String instruction = "Click to select movement position (ESC to cancel)";
@@ -589,6 +760,11 @@ public class WorldMapScreen extends Screen {
                 renderGroupIcon(guiGraphics, pixelX, pixelZ, group, posData.getMemberCount());
             }
         }
+
+        // Update active actions panel
+        if (activeActionsPanel != null) {
+            activeActionsPanel.updateActions(playerGroups, recruits);
+        }
     }
 
     private boolean isRecruitVisibleToPlayer(com.talhanation.recruits.entities.AbstractRecruitEntity recruit) {
@@ -774,6 +950,116 @@ public class WorldMapScreen extends Screen {
         }
     }
 
+    private void renderGroupTargetMarkers(GuiGraphics guiGraphics) {
+        if (groupTargetPositions.isEmpty()) return;
+
+        // Update dashed line animation
+        dashedLineOffset += 0.5f;
+        if (dashedLineOffset > 10.0f) {
+            dashedLineOffset = 0.0f;
+        }
+
+        // Iterate through groups to find their current positions and render targets
+        for (GroupIconInfo iconInfo : groupIcons) {
+            UUID groupUUID = iconInfo.group.getUUID();
+            int[] target = groupTargetPositions.get(groupUUID);
+
+            if (target != null) {
+                // Current position (from icon)
+                int currentPixelX = iconInfo.x;
+                int currentPixelY = iconInfo.y;
+
+                // Target position
+                int targetPixelX = (int)(offsetX + target[0] * scale);
+                int targetPixelY = (int)(offsetZ + target[1] * scale);
+
+                // Check if group has reached the target (within 5 blocks)
+                double groupWorldX = (currentPixelX - offsetX) / scale;
+                double groupWorldZ = (currentPixelY - offsetZ) / scale;
+                double distance = Math.sqrt(
+                    Math.pow(target[0] - groupWorldX, 2) +
+                    Math.pow(target[1] - groupWorldZ, 2)
+                );
+
+                if (distance < 5.0) {
+                    // Group has reached target, remove marker
+                    groupTargetPositions.remove(groupUUID);
+                    // Also remove from cancelled markers (they arrived naturally)
+                    cancelledMarkers.remove(groupUUID);
+                    continue;
+                }
+
+                // Draw dashed line from current position to target
+                renderDashedLine(guiGraphics, currentPixelX, currentPixelY, targetPixelX, targetPixelY);
+
+                // Draw green X at target position
+                renderTargetX(guiGraphics, targetPixelX, targetPixelY);
+            }
+        }
+    }
+
+    private void renderDashedLine(GuiGraphics guiGraphics, int x1, int y1, int x2, int y2) {
+        // Calculate line direction and length
+        double dx = x2 - x1;
+        double dy = y2 - y1;
+        double length = Math.sqrt(dx * dx + dy * dy);
+
+        if (length < 1) return;
+
+        // Normalize direction
+        dx /= length;
+        dy /= length;
+
+        // Draw dashed segments
+        double dashLength = 5.0;
+        double gapLength = 5.0;
+        double totalSegment = dashLength + gapLength;
+
+        int color = 0xFF00FF00; // Green color
+
+        for (double dist = dashedLineOffset; dist < length; dist += totalSegment) {
+            double dashEnd = Math.min(dist + dashLength, length);
+
+            int startX = (int)(x1 + dx * dist);
+            int startY = (int)(y1 + dy * dist);
+            int endX = (int)(x1 + dx * dashEnd);
+            int endY = (int)(y1 + dy * dashEnd);
+
+            // Draw thick line (2 pixels)
+            guiGraphics.fill(startX, startY, endX + 1, startY + 2, color);
+            guiGraphics.fill(startX, startY, startX + 2, endY + 1, color);
+        }
+    }
+
+    private void renderTargetX(GuiGraphics guiGraphics, int x, int y) {
+        int xSize = 6;
+        int thickness = 2;
+        int color = 0xFF00FF00; // Green color
+
+        // Draw X - two diagonal lines
+        // Line from top-left to bottom-right
+        for (int i = -xSize; i <= xSize; i++) {
+            for (int t = 0; t < thickness; t++) {
+                guiGraphics.fill(
+                    x + i, y + i + t,
+                    x + i + 1, y + i + t + 1,
+                    color
+                );
+            }
+        }
+
+        // Line from top-right to bottom-left
+        for (int i = -xSize; i <= xSize; i++) {
+            for (int t = 0; t < thickness; t++) {
+                guiGraphics.fill(
+                    x + i, y - i + t,
+                    x + i + 1, y - i + t + 1,
+                    color
+                );
+            }
+        }
+    }
+
     private static final ItemStack BOAT_STACK = new ItemStack(Items.OAK_BOAT);
     private void renderPlayerPosition(GuiGraphics guiGraphics) {
         if (player == null) return;
@@ -944,8 +1230,8 @@ public class WorldMapScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        // Handle movement position selection mode
-        if (selectingMovementPosition && button == 0) {
+        // Handle movement position selection mode (only if no menus are visible)
+        if (selectingMovementPosition && button == 0 && !groupContextMenu.isVisible() && !contextMenu.isVisible()) {
             // Calculate world position from mouse click
             double worldX = (mouseX - offsetX) / scale;
             double worldZ = (mouseY - offsetZ) / scale;
@@ -1009,53 +1295,56 @@ public class WorldMapScreen extends Screen {
         }
         // TROOP MODE: Handle group interactions
         else {
-            if (button == 0) { // Left click
-                // Check if clicking on a group icon
-                boolean clickedOnGroup = false;
-                for (GroupIconInfo iconInfo : groupIcons) {
-                    if (iconInfo.contains((int)mouseX, (int)mouseY)) {
-                        clickedOnGroup = true;
+            // Don't handle group interactions if we're in movement position selection mode
+            if (!selectingMovementPosition) {
+                if (button == 0) { // Left click
+                    // Check if clicking on a group icon
+                    boolean clickedOnGroup = false;
+                    for (GroupIconInfo iconInfo : groupIcons) {
+                        if (iconInfo.contains((int)mouseX, (int)mouseY)) {
+                            clickedOnGroup = true;
 
-                        // Check if Ctrl is pressed
-                        boolean isCtrlPressed = Screen.hasControlDown();
+                            // Check if Ctrl is pressed
+                            boolean isCtrlPressed = Screen.hasControlDown();
 
-                        if (isCtrlPressed) {
-                            // Toggle selection of this group
-                            if (selectedGroups.contains(iconInfo.group.getUUID())) {
-                                selectedGroups.remove(iconInfo.group.getUUID());
+                            if (isCtrlPressed) {
+                                // Toggle selection of this group
+                                if (selectedGroups.contains(iconInfo.group.getUUID())) {
+                                    selectedGroups.remove(iconInfo.group.getUUID());
+                                } else {
+                                    selectedGroups.add(iconInfo.group.getUUID());
+                                }
                             } else {
+                                // Clear previous selection and select only this group
+                                selectedGroups.clear();
                                 selectedGroups.add(iconInfo.group.getUUID());
                             }
-                        } else {
-                            // Clear previous selection and select only this group
-                            selectedGroups.clear();
-                            selectedGroups.add(iconInfo.group.getUUID());
+
+                            break;
                         }
-
-                        break;
                     }
+
+                    // If didn't click on a group, prepare for dragging
+                    if (!clickedOnGroup) {
+                        lastMouseX = mouseX;
+                        lastMouseY = mouseY;
+                        isDragging = true;
+                    }
+
+                    updateClearSelectionButton();
                 }
 
-                // If didn't click on a group, prepare for dragging
-                if (!clickedOnGroup) {
-                    lastMouseX = mouseX;
-                    lastMouseY = mouseY;
-                    isDragging = true;
+                if (button == 1) { // Right click - start drag selection
+                    // Close any open menus first
+                    contextMenu.close();
+                    groupContextMenu.close();
+                    claimInfoMenu.close();
+
+                    // Start right-click drag selection
+                    rightClickStartX = mouseX;
+                    rightClickStartY = mouseY;
+                    isDraggingRightClick = true;
                 }
-
-                updateClearSelectionButton();
-            }
-
-            if (button == 1) { // Right click - start drag selection
-                // Close any open menus first
-                contextMenu.close();
-                groupContextMenu.close();
-                claimInfoMenu.close();
-
-                // Start right-click drag selection
-                rightClickStartX = mouseX;
-                rightClickStartY = mouseY;
-                isDraggingRightClick = true;
             }
         }
 

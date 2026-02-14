@@ -46,11 +46,19 @@ public class MessageSetGroupFormation implements Message<MessageSetGroupFormatio
         recruits.removeIf(recruit -> !recruit.isEffectedByCommand(this.playerUUID, this.groupUUID));
 
         if (!recruits.isEmpty()) {
-            // Use the same method as "hold your position" command to calculate center
-            Vec3 centerPos = FormationUtils.getGeometricMedian(recruits, (ServerLevel) context.getSender().getCommandSenderWorld());
+            // Check if any recruit is actively moving (shouldMovePos = true)
+            boolean isMoving = recruits.stream().anyMatch(AbstractRecruitEntity::getShouldMovePos);
 
-            // Apply the formation at the group's current center position
-            CommandEvents.applyFormation(this.formation, recruits, context.getSender(), centerPos);
+            // Only apply formation immediately if troops are NOT actively moving
+            // If they are moving, they will apply the formation when they reach their destination
+            if (!isMoving) {
+                // Use the same method as "hold your position" command to calculate center
+                Vec3 centerPos = FormationUtils.getGeometricMedian(recruits, (ServerLevel) context.getSender().getCommandSenderWorld());
+
+                // Apply the formation at the group's current center position
+                CommandEvents.applyFormation(this.formation, recruits, context.getSender(), centerPos);
+            }
+            // If moving, the formation preference is saved and will be applied at destination
         }
     }
 

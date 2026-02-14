@@ -49,6 +49,14 @@ public class RecruitHoldPosGoal extends Goal {
                     this.recruit.getJumpControl().jump();
                 }
             } else{
+                // When reached the position and it's back to position mode, clear it
+                if(recruit.getIsBackToPosition()){
+                    recruit.setIsBackToPosition(false);
+                    recruit.setShouldHoldPos(false);
+                    recruit.clearHoldPos();
+                    recruit.setFollowState(1); // Set to follow
+                }
+
                 if(recruit.rotate){
                     this.recruit.setYRot(recruit.ownerRot);
                     this.recruit.yRotO = this.recruit.ownerRot;

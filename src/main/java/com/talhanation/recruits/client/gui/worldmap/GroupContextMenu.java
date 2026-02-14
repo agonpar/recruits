@@ -223,13 +223,24 @@ public class GroupContextMenu {
         guiGraphics.fill(submenuX, submenuY, submenuX + submenuWidth, submenuY + submenuHeight, 0xFF1A1A1A);
         guiGraphics.renderOutline(submenuX, submenuY, submenuWidth, submenuHeight, 0xFF555555);
 
+        // Check if groups have last movement direction (for Forward/Backward)
+        boolean hasDirection = worldMapScreen.hasLastMovementDirection(selectedGroupUUIDs);
+
         int entryY = submenuY;
         for (int i = 0; i < movementOptions.length; i++) {
-            boolean hovered = isMouseOverSubmenuEntry(submenuX, entryY, submenuWidth);
+            boolean isForwardOrBackward = (i == 6 || i == 7); // Forward or Backward indices
+            boolean isDisabled = isForwardOrBackward && !hasDirection;
+
+            boolean hovered = isMouseOverSubmenuEntry(submenuX, entryY, submenuWidth) && !isDisabled;
             int bgColor = hovered ? 0xFF333333 : 0xFF1A1A1A;
             guiGraphics.fill(submenuX, entryY, submenuX + submenuWidth, entryY + entryHeight, bgColor);
 
-            int textColor = hovered ? 0xFFFFFF : 0xCCCCCC;
+            int textColor;
+            if (isDisabled) {
+                textColor = 0xFF666666; // Gray out disabled options
+            } else {
+                textColor = hovered ? 0xFFFFFF : 0xCCCCCC;
+            }
             guiGraphics.drawString(screen.getMinecraft().font, movementOptions[i], submenuX + 8, entryY + 6, textColor);
 
             entryY += entryHeight;
@@ -267,19 +278,34 @@ public class GroupContextMenu {
             // 4=Hold My Position, 6=Move, 7=Forward, 8=Backward
             int[] movementStates = {1, 0, 2, 3, 4, 6, 7, 8};
 
+            // Check if groups have last movement direction (for Forward/Backward)
+            boolean hasDirection = worldMapScreen.hasLastMovementDirection(selectedGroupUUIDs);
+
             for (int i = 0; i < movementStates.length; i++) {
                 if (mouseX >= submenuX && mouseX <= submenuX + submenuWidth &&
                     mouseY >= entryY && mouseY <= entryY + entryHeight) {
 
                     int movementState = movementStates[i];
 
-                    // Check if this movement requires position selection (Move, Forward, Backward)
-                    if (movementState == 6 || movementState == 7 || movementState == 8) {
-                        // Activate position selection mode
+                    // Check if this is Forward/Backward and it's disabled
+                    boolean isForwardOrBackward = (i == 6 || i == 7);
+                    if (isForwardOrBackward && !hasDirection) {
+                        // Ignore click on disabled option
+                        return false;
+                    }
+
+                    // Only Move requires position selection
+                    // Forward and Backward calculate position automatically from saved direction
+                    if (movementState == 6) {
+                        // Move - Activate position selection mode
                         worldMapScreen.startMovementPositionSelection(movementState, selectedGroupUUIDs);
                         close();
+                    } else if (movementState == 7 || movementState == 8) {
+                        // Forward or Backward - Execute directly with automatic position calculation
+                        worldMapScreen.executeForwardBackwardMovement(movementState, selectedGroupUUIDs);
+                        close();
                     } else {
-                        // Send movement command immediately for other commands
+                        // Other commands - Send movement command immediately
                         applyMovementToSelectedGroups(movementState);
                         close();
                     }
@@ -305,6 +331,11 @@ public class GroupContextMenu {
 
         UUID playerUUID = worldMapScreen.getPlayer().getUUID();
 
+        // Remove target markers when changing formation (as it will stop movement)
+        for (UUID groupUUID : selectedGroupUUIDs) {
+            worldMapScreen.removeGroupTargetPosition(groupUUID);
+        }
+
         // Send formation preference to server for each selected group
         // This only saves the preference, it won't move the troops
         for (UUID groupUUID : selectedGroupUUIDs) {
@@ -322,6 +353,12 @@ public class GroupContextMenu {
 
         UUID playerUUID = worldMapScreen.getPlayer().getUUID();
         int formation = ClientManager.formationSelection;
+
+        // Remove target markers for groups receiving non-movement commands
+        // Movement states that cancel ongoing movement: Follow(1), Wander(0), Hold Position(2), etc.
+        for (UUID groupUUID : selectedGroupUUIDs) {
+            worldMapScreen.removeGroupTargetPosition(groupUUID);
+        }
 
         // Send movement command to server for each selected group
         for (UUID groupUUID : selectedGroupUUIDs) {
